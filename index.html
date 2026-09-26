@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RIFTLINE — Tactical Shooter</title>
+  <meta name="description" content="A browser tactical 5v5 shooter prototype: plant or defuse the Charge.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- ============ HUD ============ -->
+  <div id="hud" class="hidden">
+    <div id="topbar">
+      <div class="teamscore ally"><div class="pips" id="allyPips"></div><div class="score" id="allyScore">0</div></div>
+      <div id="timerBox"><div id="roundLabel">ROUND 1</div><div id="timer">1:40</div><div id="sideLabel">ATTACK</div></div>
+      <div class="teamscore enemy"><div class="score" id="enemyScore">0</div><div class="pips" id="enemyPips"></div></div>
+    </div>
+    <canvas id="minimap" width="240" height="186"></canvas>
+    <div id="killfeed"></div>
+
+    <div id="crosshair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="d"></i></div>
+    <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+    <div id="killBanner"></div>
+    <div id="dmgDir"><div></div></div>
+
+    <div id="vitals">
+      <div id="armorBox"><span class="lbl">SHIELD</span><span id="armorVal">0</span></div>
+      <div id="hpBox"><span class="lbl">HEALTH</span><span id="hpVal">100</span></div>
+    </div>
+    <div id="ammo">
+      <div id="weaponName">SIDEARM</div>
+      <div class="ammoNums"><span id="magVal">12</span><span class="sep">/</span><span id="resVal">36</span></div>
+    </div>
+    <div id="credits">¤ 800</div>
+    <div id="chargeIcon">◆ CHARGE</div>
+    <div id="prompt"></div>
+    <div id="toast"></div>
+    <div id="progress"><div id="progressLabel"></div><div class="bar"><div id="progressFill"></div></div></div>
+    <div id="announce" class="hidden"><div id="annTitle"></div><div id="annSub"></div></div>
+    <div id="spectate"></div>
+    <div id="dmgVignette"></div>
+    <div id="scope"><div class="scopeHole"></div><div class="scopeH"></div><div class="scopeV"></div></div>
+  </div>
+
+  <!-- ============ BUY MENU ============ -->
+  <div id="buyMenu" class="hidden">
+    <div class="buyPanel">
+      <div class="buyHead"><h2>ARMORY</h2><span id="buyTimer"></span><span id="buyCredits">¤ 800</span></div>
+      <div id="buyGrid"></div>
+      <div class="buyFoot"><span>Click to buy · B to close</span><button id="buyClose">CLOSE</button></div>
+    </div>
+  </div>
+
+  <div id="scoreboard" class="hidden"></div>
+
+  <div id="pause" class="hidden">
+    <div class="pauseBox"><h2>PAUSED</h2><p id="pauseMsg">Click anywhere to resume</p></div>
+  </div>
+
+  <!-- ============ MAIN MENU ============ -->
+  <div id="menu">
+    <div class="menuInner">
+      <div class="brand"><span class="slash"></span><h1>RIFTLINE</h1><p>TACTICAL SHOOTER · PROTOTYPE</p></div>
+      <div class="menuGrid">
+        <div class="menuCol">
+          <label>MODE</label>
+          <div class="seg"><button data-size="1">1v1</button><button data-size="3" class="on">3v3</button><button data-size="5">5v5</button></div>
+          <label>BOT DIFFICULTY</label>
+          <div class="seg"><button data-diff="easy">EASY</button><button data-diff="normal" class="on">NORMAL</button><button data-diff="hard">HARD</button></div>
+          <label>SENSITIVITY <b id="sensVal">1.00</b></label>
+          <input type="range" id="sens" min="0.1" max="3" step="0.05" value="1">
+          <label>FIELD OF VIEW <b id="fovVal">103</b></label>
+          <input type="range" id="fovIn" min="80" max="115" step="1" value="103">
+          <label>VOLUME <b id="volVal">60</b></label>
+          <input type="range" id="vol" min="0" max="1" step="0.05" value="0.6">
+          <button id="playBtn">PLAY</button>
+          <p id="touchNote" class="hidden">This game needs a keyboard and mouse.</p>
+        </div>
+        <div class="menuCol help">
+          <label>OBJECTIVE</label>
+          <p>Attackers plant the <b>Charge</b> on site A or B. Defenders stop them or defuse it. First to <b>7 rounds</b> wins. Sides swap after round 6.</p>
+          <label>CONTROLS</label>
+          <ul>
+            <li><kbd>W A S D</kbd> move</li>
+            <li><kbd>Mouse</kbd> aim · <kbd>LMB</kbd> fire · <kbd>RMB</kbd> scope</li>
+            <li><kbd>Shift</kbd> walk (accurate) · <kbd>Ctrl</kbd>/<kbd>C</kbd> crouch</li>
+            <li><kbd>Space</kbd> jump · <kbd>R</kbd> reload</li>
+            <li><kbd>1</kbd> primary · <kbd>2</kbd> sidearm · <kbd>Wheel</kbd> swap</li>
+            <li><kbd>B</kbd> buy menu (buy phase) · <kbd>Tab</kbd> scoreboard</li>
+            <li><kbd>F</kbd> hold to plant / defuse · <kbd>Esc</kbd> pause</li>
+          </ul>
+          <p class="tip">Tip: stop moving before you shoot. Rifles are accurate on the first bullet, and pull down to control the spray.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="gameover" class="hidden">
+    <div class="goBox">
+      <h1 id="goTitle">VICTORY</h1>
+      <div id="goScore">7 — 3</div>
+      <div id="goStats"></div>
+      <div class="goBtns"><button id="againBtn">PLAY AGAIN</button><button id="menuBtn" class="ghost">MAIN MENU</button></div>
+    </div>
+  </div>
+
+  <div id="nogl" class="hidden"><div class="pauseBox"><h2>WebGL2 not available</h2><p>Please use a recent Chrome, Edge or Firefox on a desktop computer.</p></div></div>
+
+  <script src="js/engine.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
