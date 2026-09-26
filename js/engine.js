@@ -128,7 +128,7 @@ precision highp float; precision highp sampler2DShadow;
 in vec3 vN; in vec2 vUv; in vec3 vCol; in vec3 vW; in vec4 vL;
 uniform sampler2D uTex; uniform sampler2DShadow uShadow;
 uniform vec4 uColor; uniform vec3 uEmis; uniform vec3 uSunDir, uSunCol, uSky, uGround, uFog, uCam;
-uniform vec2 uFogRange; uniform float uUseShadow, uUnlit, uFogOn;
+uniform vec2 uFogRange; uniform float uUseShadow, uUnlit, uFogOn, uAlphaCut;
 out vec4 o;
 vec3 aces(vec3 x){ return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14),0.0,1.0); }
 float shadowF(){
@@ -140,7 +140,7 @@ float shadowF(){
 }
 void main(){
   vec4 base = texture(uTex, vUv) * uColor * vec4(vCol,1.0);
-  if(base.a < 0.01) discard;
+  if(base.a < uAlphaCut) discard;
   vec3 c;
   if(uUnlit > 0.5){ c = base.rgb; }
   else {
@@ -211,7 +211,7 @@ class Renderer {
     gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.loc = {};
-    for (const n of ['uModel', 'uVP', 'uLightVP', 'uTex', 'uShadow', 'uColor', 'uEmis', 'uSunDir', 'uSunCol', 'uSky', 'uGround', 'uFog', 'uCam', 'uFogRange', 'uUseShadow', 'uUnlit', 'uFogOn'])
+    for (const n of ['uModel', 'uVP', 'uLightVP', 'uTex', 'uShadow', 'uColor', 'uEmis', 'uSunDir', 'uSunCol', 'uSky', 'uGround', 'uFog', 'uCam', 'uFogRange', 'uUseShadow', 'uUnlit', 'uFogOn', 'uAlphaCut'])
       this.loc[n] = gl.getUniformLocation(this.lit, n);
     this.dloc = { uModel: gl.getUniformLocation(this.depth, 'uModel'), uLightVP: gl.getUniformLocation(this.depth, 'uLightVP') };
     this.sloc = { uInvVP: gl.getUniformLocation(this.sky, 'uInvVP'), uCam: gl.getUniformLocation(this.sky, 'uCam'), uSunDir: gl.getUniformLocation(this.sky, 'uSunDir') };
@@ -242,9 +242,9 @@ class Renderer {
     gl.bindVertexArray(null);
     return { vao, count: geo.i.length, type: big ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT };
   }
-  texture(src, { repeat = true, mips = true, srgb = true } = {}) {
+  texture(src, { repeat = true, mips = true, srgb = true, flipY = true } = {}) {
     const gl = this.gl, t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flipY);
     if (!src) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
     else gl.texImage2D(gl.TEXTURE_2D, 0, srgb ? gl.SRGB8_ALPHA8 : gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
     const w = repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
@@ -273,9 +273,9 @@ class Renderer {
     this.camYaw = yaw; this.camPitch = pitch;
   }
   setLight(cx, cz, half) {
-    const d = this.sunDir, v = M4.create(), p = M4.create();
-    M4.lookAt(v, cx + d[0] * 120, d[1] * 120, cz + d[2] * 120, cx, 0, cz, 0, 1, 0);
-    M4.ortho(p, -half, half, -half, half, 1, 260);
+    const d = this.sunDir, v = M4.create(), p = M4.create(), dist = half * 1.5 + 60;
+    M4.lookAt(v, cx + d[0] * dist, d[1] * dist, cz + d[2] * dist, cx, 0, cz, 0, 1, 0);
+    M4.ortho(p, -half, half, -half, half, 1, dist * 2 + 60);
     M4.mul(this.lightVP, p, v);
   }
   // queue a draw. opts: tex, color, emis, mode ('lit'|'unlit'|'add'|'alpha'), cast, layer ('world'|'vm'), fog
@@ -284,7 +284,7 @@ class Renderer {
     it.mesh = mesh; it.m.set(model);
     it.tex = o.tex || this.white; it.color = o.color || WHITE4; it.emis = o.emis || ZERO3;
     it.mode = o.mode || 'lit'; it.cast = o.cast !== false && it.mode === 'lit'; it.layer = o.layer || 'world';
-    it.fog = o.fog !== false; it.shadow = o.shadow !== false; it.depthWrite = o.depthWrite;
+    it.fog = o.fog !== false; it.shadow = o.shadow !== false; it.depthWrite = o.depthWrite; it.cut = o.alphaCut || 0.01; it.noCull = !!o.noCull;
     this.queue.push(it);
   }
   render(vmProj, vmView) {
@@ -297,6 +297,7 @@ class Renderer {
     gl.useProgram(this.depth); gl.uniformMatrix4fv(this.dloc.uLightVP, false, this.lightVP);
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(2, 4);
     for (const it of this.queue) if (it.cast && it.layer === 'world') {
+      if (it.noCull) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
       gl.uniformMatrix4fv(this.dloc.uModel, false, it.m); gl.bindVertexArray(it.mesh.vao);
       gl.drawElements(gl.TRIANGLES, it.mesh.count, it.mesh.type, 0);
     }
@@ -328,6 +329,8 @@ class Renderer {
           const ph = (it.mode === 'lit' || it.mode === 'unlit') ? 'opaque' : it.mode;
           if (ph !== phase) continue;
           gl.uniformMatrix4fv(L.uModel, false, it.m);
+          if (phase === 'opaque') { if (it.noCull) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE); }
+          gl.uniform1f(L.uAlphaCut, it.cut);
           gl.uniform4fv(L.uColor, it.color); gl.uniform3fv(L.uEmis, it.emis);
           gl.uniform1f(L.uUnlit, it.mode === 'lit' ? 0 : 1);
           gl.uniform1f(L.uUseShadow, (layer === 'world' && it.shadow) ? 1 : 0);

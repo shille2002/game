@@ -68,6 +68,14 @@
       <div class="brand"><span class="slash"></span><h1>RIFTLINE</h1><p>TACTICAL SHOOTER · PROTOTYPE</p></div>
       <div class="menuGrid">
         <div class="menuCol">
+          <label>MAP</label>
+          <div class="seg"><button id="mapDefault" class="on">RIFTLINE</button><button id="mapLoad">LOAD .GLB…</button></div>
+          <input type="file" id="mapFile" accept=".glb,model/gltf-binary" hidden>
+          <div id="mapStatus">Built-in map. Or load your own .glb map (it stays on your computer).</div>
+          <div id="mapScaleRow" class="hidden">
+            <label>MAP SIZE <b id="mapScaleVal">×1.00</b></label>
+            <div class="scaleRow"><input type="range" id="mapScale" min="0.4" max="2.5" step="0.05" value="1"><button id="mapApply">APPLY</button></div>
+          </div>
           <label>MODE</label>
           <div class="seg"><button data-size="1">1v1</button><button data-size="3" class="on">3v3</button><button data-size="5">5v5</button></div>
           <label>BOT DIFFICULTY</label>
@@ -112,6 +120,7 @@
   <div id="nogl" class="hidden"><div class="pauseBox"><h2>WebGL2 not available</h2><p>Please use a recent Chrome, Edge or Firefox on a desktop computer.</p></div></div>
 
   <script src="js/engine.js"></script>
+  <script src="js/mapload.js"></script>
   <script src="js/game.js"></script>
 </body>
 </html>

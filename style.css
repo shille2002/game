@@ -148,3 +148,14 @@ input[type=range] { width: 100%; accent-color: var(--enemy); }
 .goBtns button { white-space: nowrap; }
 .goBtns button.ghost { margin-top: 22px; background: transparent; border: 2px solid var(--ink); color: var(--ink); font-size: 20px; font-weight: 700; letter-spacing: 4px; padding: 0 26px; }
 @media (max-width: 760px) { .menuGrid { grid-template-columns: 1fr; } #minimap { width: 150px; height: 116px; } }
+
+#mapStatus { font-size: 14px; opacity: .8; margin-top: 6px; line-height: 1.35; min-height: 19px; }
+#mapStatus.ok { color: var(--ally); opacity: 1; } #mapStatus.err { color: var(--enemy); opacity: 1; }
+.scaleRow { display: flex; gap: 8px; align-items: center; }
+.scaleRow button { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.25); color: var(--ink); font-weight: 700; letter-spacing: 2px; padding: 4px 12px; }
+#playBtn:disabled { filter: grayscale(1) brightness(.6); cursor: wait; }
+@media (max-height: 860px) {
+  .brand { margin-bottom: 10px; } .brand h1 { font-size: 64px; letter-spacing: 10px; } .brand .slash { bottom: 24px; }
+  .menuCol label { margin: 9px 0 4px; } .seg button { padding: 6px; }
+  #playBtn { margin-top: 14px; padding: 8px; font-size: 24px; }
+}

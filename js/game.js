@@ -8,7 +8,7 @@
 /* ================= MAP =================
    # wall   . floor   c low crate   C tall crate
    A / B  bomb sites   T attacker spawn   D defender spawn */
-const MAP = [
+const DEFAULT_MAP = [
   '########################################',
   '###############DDDDDDDDDD###############',
   '#########......DDDDDDDDDD......#########',
@@ -41,45 +41,72 @@ const MAP = [
   '###########TTTTTTTTTTTTTTTTTT###########',
   '########################################',
 ];
-const CELL = 3, WALL_H = 6.5, CRATE_H = 1.1, TALL_H = 2.4;
-const ROWS = MAP.length, COLS = MAP[0].length;
-const MAP_W = COLS * CELL, MAP_D = ROWS * CELL;
-const HGT = new Float32Array(ROWS * COLS);
-for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-  const ch = MAP[r][c];
-  HGT[r * COLS + c] = ch === '#' ? WALL_H : ch === 'c' ? CRATE_H : ch === 'C' ? TALL_H : 0;
-}
+const CRATE_H = 1.1, TALL_H = 2.4;
+// Map state (either the built-in grid map or a custom .glb map)
+let CELL = 3, WALL_H = 6.5, MAP = DEFAULT_MAP, ROWS = 0, COLS = 0, MAP_W = 0, MAP_D = 0;
+let HGT = null, WALK = null, REG = {}, SETS = {}, SITE_CELLS = {}, SPAWN_CELLS = {}, POI = {}, ENTRIES = {}, CUSTOM = null;
 const hAt = (c, r) => (c < 0 || r < 0 || c >= COLS || r >= ROWS) ? WALL_H : HGT[r * COLS + c];
+const isWalk = (c, r) => c >= 0 && r >= 0 && c < COLS && r < ROWS && WALK[r * COLS + c] === 1;
 const cellOf = v => Math.floor(v / CELL);
 const cc = (c, r) => ({ x: (c + 0.5) * CELL, z: (r + 0.5) * CELL });
-function bboxOf(ch) {
-  let c0 = 1e9, c1 = -1, r0 = 1e9, r1 = -1;
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (MAP[r][c] === ch) {
-    c0 = Math.min(c0, c); c1 = Math.max(c1, c); r0 = Math.min(r0, r); r1 = Math.max(r1, r);
-  }
-  return { c0, c1, r0, r1 };
-}
-const REG = { A: bboxOf('A'), B: bboxOf('B'), T: bboxOf('T'), D: bboxOf('D') };
-const inReg = (g, x, z) => { const c = cellOf(x), r = cellOf(z); return c >= g.c0 && c <= g.c1 && r >= g.r0 && r <= g.r1; };
-function floorCells(g, filter) {
+const inSet = (key, x, z) => { const c = cellOf(x), r = cellOf(z); return c >= 0 && r >= 0 && c < COLS && r < ROWS && SETS[key].has(r * COLS + c); };
+// open cells with a free neighbour ring (so bots don't hug walls)
+const roomy = (c, r) => {
+  if (!isWalk(c, r)) return false; const h = hAt(c, r); let n = 0;
+  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) if (isWalk(c + dc, r + dr) && Math.abs(hAt(c + dc, r + dr) - h) < 0.3) n++;
+  return n >= 7;
+};
+function cellsOf(key, filter) {
   const out = [];
-  for (let r = g.r0; r <= g.r1; r++) for (let c = g.c0; c <= g.c1; c++)
-    if (hAt(c, r) === 0 && (!filter || filter(c, r))) out.push([c, r]);
+  for (const i of SETS[key]) { const c = i % COLS, r = (i / COLS) | 0; if (isWalk(c, r) && (!filter || filter(c, r))) out.push([c, r]); }
   return out;
 }
-// open cells with at least 1 free neighbour ring (so bots don't hug walls)
-const roomy = (c, r) => { let n = 0; for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) if (hAt(c + dc, r + dr) === 0) n++; return n >= 7; };
-const SITE_CELLS = { A: floorCells(REG.A, roomy), B: floorCells(REG.B, roomy) };
-const SPAWN_CELLS = { atk: floorCells(REG.T), def: floorCells(REG.D) };
-const POI = {
-  mid: [19, 17], midTop: [20, 9], aLink: [13, 9], bLink: [26, 9],
-  aLobby: [6, 24], bLobby: [33, 24], aMain: [4, 15], bMain: [35, 15],
-};
-const ENTRIES = { A: [[3, 12], [13, 8.5], [12, 2.5]], B: [[35, 12], [26, 8.5], [27, 2.5]] };
+function bboxOfSet(set) {
+  let c0 = 1e9, c1 = -1, r0 = 1e9, r1 = -1;
+  for (const i of set) { const c = i % COLS, r = (i / COLS) | 0; c0 = Math.min(c0, c); c1 = Math.max(c1, c); r0 = Math.min(r0, r); r1 = Math.max(r1, r); }
+  return { c0, c1, r0, r1 };
+}
+function finishMapSetup() {
+  MAP_W = COLS * CELL; MAP_D = ROWS * CELL;
+  for (const k of ['A', 'B', 'T', 'D']) REG[k] = bboxOfSet(SETS[k]);
+  SITE_CELLS = { A: cellsOf('A', roomy), B: cellsOf('B', roomy) };
+  if (!SITE_CELLS.A.length) SITE_CELLS.A = cellsOf('A'); if (!SITE_CELLS.B.length) SITE_CELLS.B = cellsOf('B');
+  SPAWN_CELLS = { atk: cellsOf('T'), def: cellsOf('D') };
+}
+function initDefaultMap() {
+  CUSTOM = null; MAP = DEFAULT_MAP; CELL = 3; WALL_H = 6.5;
+  ROWS = MAP.length; COLS = MAP[0].length;
+  HGT = new Float32Array(ROWS * COLS); WALK = new Uint8Array(ROWS * COLS);
+  SETS = { A: new Set(), B: new Set(), T: new Set(), D: new Set() };
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const ch = MAP[r][c], i = r * COLS + c;
+    HGT[i] = ch === '#' ? WALL_H : ch === 'c' ? CRATE_H : ch === 'C' ? TALL_H : 0;
+    WALK[i] = HGT[i] === 0 ? 1 : 0;
+  }
+  // sites include their crates (bounding box of the letters)
+  for (const k of ['A', 'B', 'T', 'D']) {
+    let c0 = 1e9, c1 = -1, r0 = 1e9, r1 = -1;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (MAP[r][c] === k) { c0 = Math.min(c0, c); c1 = Math.max(c1, c); r0 = Math.min(r0, r); r1 = Math.max(r1, r); }
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) SETS[k].add(r * COLS + c);
+  }
+  POI = { mid: [19, 17], midTop: [20, 9], aLink: [13, 9], bLink: [26, 9], aLobby: [6, 24], bLobby: [33, 24], aMain: [4, 15], bMain: [35, 15] };
+  ENTRIES = { A: [[3, 12], [13, 8.5], [12, 2.5]], B: [[35, 12], [26, 8.5], [27, 2.5]] };
+  finishMapSetup();
+}
+function initCustomMap(data) {
+  const g = data.grid, L = data.layout;
+  CUSTOM = data; MAP = null; CELL = g.CELL; COLS = g.COLS; ROWS = g.ROWS; HGT = g.H; WALK = g.WALK; WALL_H = 60;
+  SETS = { A: new Set(L.siteA), B: new Set(L.siteB), T: new Set(L.spawnT), D: new Set(L.spawnD) };
+  const xy = i => [i % COLS, (i / COLS) | 0];
+  POI = { mid: xy(L.mid), midTop: xy(L.mid) };
+  ENTRIES = { A: L.entries.A.map(xy), B: L.entries.B.map(xy) };
+  finishMapSetup();
+}
+initDefaultMap();
 
 /* ================= CONSTANTS ================= */
 const R_AG = 0.36, STEP = 0.45, GRAV = 19, JUMP_V = 6.3;
-const RUN = 6.75, WALK = 3.3, CROUCH_SPD = 2.4;
+const RUN = 6.75, WALK_SPD = 3.3, CROUCH_SPD = 2.4;
 const EYE_STAND = 1.62, EYE_CROUCH = 1.1;
 const WIN_ROUNDS = 7, HALF = 6;
 const BUY_TIME = 15, FIRST_BUY = 22, ROUND_TIME = 100, CHARGE_TIME = 45, END_TIME = 5;
@@ -153,16 +180,15 @@ function moveXZ(a, dx, dz) {
 // 3D ray vs grid. returns {t, n:[nx,ny,nz]}
 function rayGrid(o, d, maxT) {
   let best = maxT, n = null;
-  if (d.y < 0) { const t = -o.y / d.y; if (t < best) { best = t; n = [0, 1, 0]; } }
   let c = cellOf(o.x), r = cellOf(o.z);
   const sc = d.x > 0 ? 1 : -1, sr = d.z > 0 ? 1 : -1;
   const tdx = d.x !== 0 ? Math.abs(CELL / d.x) : Infinity, tdz = d.z !== 0 ? Math.abs(CELL / d.z) : Infinity;
   let tmx = d.x !== 0 ? ((d.x > 0 ? (c + 1) * CELL : c * CELL) - o.x) / d.x : Infinity;
   let tmz = d.z !== 0 ? ((d.z > 0 ? (r + 1) * CELL : r * CELL) - o.z) / d.z : Infinity;
   let tIn = 0, side = -1;
-  for (let i = 0; i < 256; i++) {
+  for (let i = 0; i < 4096; i++) {
     const h = hAt(c, r), tOut = Math.min(tmx, tmz);
-    if (h > 0) {
+    {
       const yIn = o.y + d.y * tIn;
       if (yIn < h) {
         if (tIn < best) { best = tIn; n = side === 0 ? [-sc, 0, 0] : side === 1 ? [0, 0, -sr] : [0, 1, 0]; }
@@ -182,11 +208,11 @@ function los(a, b) {
   return rayGrid(a, { x: dx / L, y: dy / L, z: dz / L }, L).t >= L - 0.05;
 }
 // walkable straight line for path smoothing
-function clearLine(ax, az, bx, bz) {
+function clearLine(ax, az, bx, bz, feet = 0) {
   const L = Math.hypot(bx - ax, bz - az), n = Math.ceil(L / 0.6);
   for (let i = 1; i <= n; i++) {
     const t = i / n, x = ax + (bx - ax) * t, z = az + (bz - az) * t;
-    if (blocked(x, z, 0, R_AG + 0.2)) return false;
+    if (blocked(x, z, feet, R_AG + 0.2)) return false;
   }
   return true;
 }
@@ -220,25 +246,29 @@ function rayAgent(o, d, a, maxT) {
 
 /* ================= PATHFINDING (A*) ================= */
 function findPath(sc, sr, gc, gr) {
-  if (hAt(gc, gr) > 0) return null;
+  if (!isWalk(gc, gr)) return null;
   const N = ROWS * COLS, g = new Float32Array(N).fill(1e9), came = new Int32Array(N).fill(-1), closed = new Uint8Array(N);
   const s = sr * COLS + sc, goal = gr * COLS + gc; g[s] = 0;
-  const open = [s], h = i => Math.hypot(i % COLS - gc, Math.floor(i / COLS) - gr);
-  const f = new Float32Array(N).fill(1e9); f[s] = h(s);
-  while (open.length) {
-    let bi = 0; for (let i = 1; i < open.length; i++) if (f[open[i]] < f[open[bi]]) bi = i;
-    const cur = open[bi]; open[bi] = open[open.length - 1]; open.pop();
+  const h = i => Math.hypot(i % COLS - gc, Math.floor(i / COLS) - gr);
+  // binary heap of [f, idx]
+  const hf = [], hi = [];
+  const push = (f, i) => { hf.push(f); hi.push(i); let k = hf.length - 1; while (k > 0) { const p = (k - 1) >> 1; if (hf[p] <= hf[k]) break; [hf[p], hf[k]] = [hf[k], hf[p]]; [hi[p], hi[k]] = [hi[k], hi[p]]; k = p; } };
+  const pop = () => { const r = hi[0], lf = hf.pop(), li = hi.pop(); if (hf.length) { hf[0] = lf; hi[0] = li; let k = 0; for (; ;) { const l = 2 * k + 1, rr = l + 1; let m = k; if (l < hf.length && hf[l] < hf[m]) m = l; if (rr < hf.length && hf[rr] < hf[m]) m = rr; if (m === k) break; [hf[m], hf[k]] = [hf[k], hf[m]]; [hi[m], hi[k]] = [hi[k], hi[m]]; k = m; } } return r; };
+  push(h(s), s);
+  const stepOk = (a, b) => Math.abs(HGT[a] - HGT[b]) <= 1.16;
+  while (hf.length) {
+    const cur = pop();
     if (cur === goal) break;
     if (closed[cur]) continue; closed[cur] = 1;
     const cx = cur % COLS, cy = Math.floor(cur / COLS);
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       if (!dx && !dy) continue;
       const nx = cx + dx, ny = cy + dy;
-      if (hAt(nx, ny) > 0) continue;
-      if (dx && dy && (hAt(cx + dx, cy) > 0 || hAt(cx, cy + dy) > 0)) continue;
-      const ni = ny * COLS + nx; if (closed[ni]) continue;
+      if (!isWalk(nx, ny)) continue;
+      const ni = ny * COLS + nx; if (closed[ni] || (isWalk(cx, cy) && !stepOk(cur, ni))) continue;
+      if (dx && dy && (!isWalk(cx + dx, cy) || !isWalk(cx, cy + dy))) continue;
       const ng = g[cur] + (dx && dy ? 1.414 : 1);
-      if (ng < g[ni]) { g[ni] = ng; came[ni] = cur; f[ni] = ng + h(ni); open.push(ni); }
+      if (ng < g[ni]) { g[ni] = ng; came[ni] = cur; push(ng + h(ni), ni); }
     }
   }
   if (came[goal] === -1 && goal !== s) return null;
@@ -363,7 +393,6 @@ const canvas = $('game');
 let R;
 try { R = new Renderer(canvas); } catch (e) { $('nogl').classList.remove('hidden'); throw e; }
 R.resize();
-R.setLight(MAP_W / 2, MAP_D / 2, 82);
 
 const MESH = {};
 const TEX = {};
@@ -441,11 +470,19 @@ function buildMeshes() {
     x.strokeStyle = '#fff'; x.lineWidth = 6; x.globalAlpha = 0.5;
     for (let i = -256; i < 512; i += 40) { x.beginPath(); x.moveTo(i, 0); x.lineTo(i + 256, 256); x.stroke(); }
   }));
-
-  // ---- static world ----
+  TEX.letterA = letterTex('A'); TEX.letterB = letterTex('B');
+}
+function letterTex(L) {
+  return R.texture(makeCanvas(256, 256, (x) => {
+    x.font = 'bold 200px Arial, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.lineWidth = 14; x.strokeStyle = 'rgba(0,0,0,0.55)'; x.strokeText(L, 128, 138);
+    x.fillStyle = '#fff'; x.fillText(L, 128, 138);
+  }), { repeat: false });
+}
+// ---- built-in map geometry ----
+function buildDefaultWorld() {
   const fl = new Geo();
   fl.quad([0, 0, MAP_D], [MAP_W, 0, MAP_D], [MAP_W, 0, 0], [0, 0, 0], [0, 1, 0], [[0, 0], [MAP_W / 6, 0], [MAP_W / 6, MAP_D / 6], [0, MAP_D / 6]]);
-  MESH.floor = R.mesh(fl);
 
   // walls: greedy rectangles of '#', only those touching floor get geometry
   const used = new Uint8Array(ROWS * COLS);
@@ -461,7 +498,8 @@ function buildMeshes() {
     const zone = mr > 26 || mr < 2.5 ? 'S' : mx < 14 ? 'A' : mx > 26 ? 'B' : 'M';
     zones[zone].box(c * CELL, 0, r * CELL, (c2 + 1) * CELL, WALL_H, (r2 + 1) * CELL, [1, 1, 1], wallUV);
   }
-  MESH.walls = Object.entries(zones).map(([z, geo]) => ({ mesh: R.mesh(geo), tex: TEX['wall' + z] }));
+  MESH.world = [{ mesh: R.mesh(fl), tex: TEX.floor, cast: false }];
+  for (const [z, geo] of Object.entries(zones)) MESH.world.push({ mesh: R.mesh(geo), tex: TEX['wall' + z] });
   // crates
   const cr = new Geo();
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
@@ -471,7 +509,7 @@ function buildMeshes() {
     const tint = 0.85 + Math.random() * 0.3;
     cr.box(x0, 0, z0, x1, h, z1, [tint, tint, tint * 0.95], uv);
   }
-  MESH.crates = R.mesh(cr);
+  MESH.world.push({ mesh: R.mesh(cr), tex: TEX.crate });
   // backdrop buildings outside the arena (depth & silhouette)
   const bd = new Geo();
   const bcol = [[0.5, 0.46, 0.42], [0.44, 0.45, 0.48], [0.55, 0.5, 0.44]];
@@ -486,9 +524,41 @@ function buildMeshes() {
     bd.box(x - w / 2, 0, z - d / 2, x + w / 2, h, z + d / 2, pick(bcol));
   }
   bd.quad([-300, -0.05, 400], [MAP_W + 300, -0.05, 400], [MAP_W + 300, -0.05, -300], [-300, -0.05, -300], [0, 1, 0], [[0, 0], [1, 0], [1, 1], [0, 1]], [0.62, 0.55, 0.47]);
-  MESH.backdrop = R.mesh(bd);
+  MESH.world.push({ mesh: R.mesh(bd), cast: false, shadow: false });
+}
+// ---- custom .glb map geometry ----
+async function buildCustomWorld(data) {
+  const texCache = new Map();
+  const texFor = async (i) => {
+    if (i < 0 || !data.images[i]) return null;
+    if (texCache.has(i)) return texCache.get(i);
+    let t = null;
+    try {
+      const bmp = await createImageBitmap(data.images[i], { imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+      t = R.texture(bmp, { flipY: false });
+    } catch (e) { console.warn('texture failed', e); }
+    texCache.set(i, t); return t;
+  };
+  MESH.world = [];
+  for (const m of data.meshes) {
+    const mat = m.mat, tex = await texFor(mat.tex);
+    const c = mat.color;
+    const lin = v => v; // glTF factors are already linear
+    MESH.world.push({
+      mesh: R.mesh(m.geo), tex: tex || undefined, color: [lin(c[0]), lin(c[1]), lin(c[2]), c[3] ?? 1],
+      alphaCut: mat.alphaCut, noCull: true, mode: mat.blend ? 'alpha' : 'lit', cast: !mat.blend,
+      emis: mat.emis && (mat.emis[0] + mat.emis[1] + mat.emis[2]) > 0 ? mat.emis.map(v => v * 0.6) : undefined,
+    });
+  }
+}
+function applyMapLighting() {
+  const S = Math.max(MAP_W, MAP_D);
+  R.setLight(MAP_W / 2, MAP_D / 2, S * 0.62);
+  R.fogRange = [Math.max(60, S * 0.6), Math.max(260, S * 2.2)];
 }
 buildMeshes();
+buildDefaultWorld();
+applyMapLighting();
 
 /* ---- draw helpers ---- */
 const _m = M4.create(), _m2 = M4.create();
@@ -853,11 +923,14 @@ function followPath(b, dt, speed) {
   const ai = b.ai; if (!ai.path || ai.pi >= ai.path.length) { return false; }
   // smoothing: skip ahead while there's a clear line
   for (let k = 0; k < 3 && ai.pi + 1 < ai.path.length; k++) {
-    const n = cc(...ai.path[ai.pi + 1]); if (clearLine(b.pos.x, b.pos.z, n.x, n.z)) ai.pi++; else break;
+    const n = cc(...ai.path[ai.pi + 1]); if (clearLine(b.pos.x, b.pos.z, n.x, n.z, b.pos.y)) ai.pi++; else break;
   }
   const n = cc(...ai.path[ai.pi]);
   const dx = n.x - b.pos.x, dz = n.z - b.pos.z, L = Math.hypot(dx, dz);
   if (L < 0.5) { ai.pi++; return true; }
+  // hop over low barriers / onto ledges on the path
+  const nh = hAt(ai.path[ai.pi][0], ai.path[ai.pi][1]);
+  if (nh > b.pos.y + STEP && b.onGround && L < CELL * 1.6 + 0.5) { b.vel.y = JUMP_V; b.onGround = false; b.pos.y += 0.01; }
   const vx = dx / L * speed, vz = dz / L * speed;
   b.vel.x += (vx - b.vel.x) * Math.min(1, dt * 10); b.vel.z += (vz - b.vel.z) * Math.min(1, dt * 10);
   ai.moveYaw = yawTo(dx, dz);
@@ -886,8 +959,11 @@ function planBot(b, idx, teamBots) {
   const side = sideOf(b.team);
   if (side === 'atk') {
     const site = G.atkSite, viaMid = Math.random() < 0.35;
-    const lobby = site === 'A' ? POI.aLobby : POI.bLobby, main = site === 'A' ? POI.aMain : POI.bMain, link = site === 'A' ? POI.aLink : POI.bLink;
-    ai.route = viaMid ? [POI.mid, POI.midTop, link] : [lobby, main];
+    if (CUSTOM) ai.route = viaMid ? [POI.mid] : [];
+    else {
+      const lobby = site === 'A' ? POI.aLobby : POI.bLobby, main = site === 'A' ? POI.aMain : POI.bMain, link = site === 'A' ? POI.aLink : POI.bLink;
+      ai.route = viaMid ? [POI.mid, POI.midTop, link] : [lobby, main];
+    }
     ai.route.push(pick(SITE_CELLS[site]));
     ai.site = site;
   } else {
@@ -922,7 +998,7 @@ function botUpdate(b, dt) {
       acquire(b, best);
       if (b.team === G.player.team) best.spotted = G.time + 1.2;
       // callout: teammates rotate toward seen enemy's site
-      if (side === 'def' && G.phase === 'live') for (const s of ['A', 'B']) if (inReg(REG[s], best.pos.x, best.pos.z)) G.callout = { site: s, t: G.time, team: b.team };
+      if (side === 'def' && G.phase === 'live') for (const s of ['A', 'B']) if (inSet(s, best.pos.x, best.pos.z)) G.callout = { site: s, t: G.time, team: b.team };
     } else if (ai.target && G.time - ai.lastSeen > 0.3) { ai.visible = false; }
     ai.visible = !!best && best === ai.target;
   }
@@ -985,7 +1061,7 @@ function botUpdate(b, dt) {
       if (side === 'atk') {
         if (C.state === 'dropped' && isPicker(b)) dest = [cellOf(C.pos.x), cellOf(C.pos.z)];
         else if (C.state === 'carried' && C.carrier === b) {
-          if (inReg(REG[ai.site], b.pos.x, b.pos.z) && roomy(cellOf(b.pos.x), cellOf(b.pos.z)) && G.phase === 'live') {
+          if (inSet(ai.site, b.pos.x, b.pos.z) && roomy(cellOf(b.pos.x), cellOf(b.pos.z)) && G.phase === 'live') {
             b.action = { type: 'plant', t: 0 }; b.vel.x = b.vel.z = 0;
           } else dest = ai.route.length ? ai.route[0] : pick(SITE_CELLS[ai.site]);
         } else if (C.state === 'planted') {
@@ -1058,8 +1134,8 @@ function isPicker(b) {
 }
 function nearCell(p, rad) {
   const c0 = cellOf(p.x), r0 = cellOf(p.z), out = [];
-  for (let r = r0 - 2; r <= r0 + 2; r++) for (let c = c0 - 2; c <= c0 + 2; c++) if (hAt(c, r) === 0 && roomy(c, r) && Math.hypot(c - c0, r - r0) > 0.9) {
-    const q = cc(c, r); if (los({ x: q.x, y: 1.5, z: q.z }, { x: p.x, y: 0.4, z: p.z })) out.push([c, r]);
+  for (let r = r0 - 2; r <= r0 + 2; r++) for (let c = c0 - 2; c <= c0 + 2; c++) if (roomy(c, r) && Math.hypot(c - c0, r - r0) > 0.9) {
+    const q = cc(c, r); if (los({ x: q.x, y: hAt(c, r) + 1.5, z: q.z }, { x: p.x, y: p.y + 0.4, z: p.z })) out.push([c, r]);
   }
   return out.length ? pick(out) : [c0, r0];
 }
@@ -1071,12 +1147,12 @@ function integrate(a, dt) {
     if (a.pos.y <= g) { a.pos.y = g; a.vel.y = 0; if (!a.onGround && a.isPlayer) Snd.step(null, true); a.onGround = true; } else a.onGround = false;
   } else { a.pos.y = g; a.vel.y = 0; a.onGround = true; }
   a.bumped = false;
+  const px = a.pos.x, pz = a.pos.z;
   moveXZ(a, a.vel.x * dt, a.vel.z * dt);
-  // buy-phase barrier
+  // buy-phase barrier: stay inside your spawn zone
   if (G.phase === 'buy') {
-    const reg = REG[sideOf(a.team) === 'atk' ? 'T' : 'D'];
-    a.pos.x = clamp(a.pos.x, reg.c0 * CELL + R_AG, (reg.c1 + 1) * CELL - R_AG);
-    a.pos.z = clamp(a.pos.z, reg.r0 * CELL + R_AG, (reg.r1 + 1) * CELL - R_AG);
+    const key = sideOf(a.team) === 'atk' ? 'T' : 'D';
+    if (!inSet(key, a.pos.x, a.pos.z) && inSet(key, px, pz)) { a.pos.x = px; a.pos.z = pz; a.vel.x = a.vel.z = 0; }
   }
   const sp = a.speed;
   if (a.onGround && sp > 0.5) {
@@ -1102,7 +1178,7 @@ function separate() {
 function canPlant(a) {
   const C = G.charge;
   if (G.phase !== 'live' || C.state !== 'carried' || C.carrier !== a || !a.onGround) return null;
-  for (const s of ['A', 'B']) if (inReg(REG[s], a.pos.x, a.pos.z)) return s;
+  for (const s of ['A', 'B']) if (inSet(s, a.pos.x, a.pos.z)) return s;
   return null;
 }
 function canDefuse(a) {
@@ -1111,7 +1187,7 @@ function canDefuse(a) {
 }
 function doPlant(a) {
   const C = G.charge; a.action = null;
-  let site = null; for (const s of ['A', 'B']) if (inReg(REG[s], a.pos.x, a.pos.z)) site = s;
+  let site = null; for (const s of ['A', 'B']) if (inSet(s, a.pos.x, a.pos.z)) site = s;
   C.state = 'planted'; C.carrier = null; C.site = site; C.timer = CHARGE_TIME; C.beep = 0;
   C.pos = { x: a.pos.x, y: a.pos.y, z: a.pos.z };
   C.defuseHalf = false;
@@ -1144,9 +1220,10 @@ function spawnTeam(side) {
   const members = G.agents.filter(a => sideOf(a.team) === side);
   members.forEach((a, i) => {
     const [c, r] = cells[i % cells.length], p = cc(c, r);
-    a.pos = { x: p.x + rand(-0.6, 0.6), y: 0, z: p.z + rand(-0.6, 0.6) };
+    const j = CELL > 2 ? 0.6 : 0; a.pos = { x: p.x + rand(-j, j), y: hAt(c, r), z: p.z + rand(-j, j) };
     a.vel = { x: 0, y: 0, z: 0 };
     a.yaw = side === 'atk' ? 0 : Math.PI; a.pitch = 0;
+    if (CUSTOM) { const m = cc(...POI.mid); a.yaw = yawTo(m.x - a.pos.x, m.z - a.pos.z); }
   });
 }
 function startMatch(teamSize, diffName) {
@@ -1250,7 +1327,7 @@ function playerUpdate(dt) {
   }
   const f = { x: -Math.sin(p.yaw), z: -Math.cos(p.yaw) }, r = { x: Math.cos(p.yaw), z: -Math.sin(p.yaw) };
   let wx = f.x * mz + r.x * mx, wz = f.z * mz + r.z * mx; const wl = Math.hypot(wx, wz); if (wl > 0) { wx /= wl; wz /= wl; }
-  let spd = RUN; if (keys.ShiftLeft || keys.ShiftRight) spd = WALK; if (p.crouch > 0.5) spd = CROUCH_SPD;
+  let spd = RUN; if (keys.ShiftLeft || keys.ShiftRight) spd = WALK_SPD; if (p.crouch > 0.5) spd = CROUCH_SPD;
   if (G.scoped) spd = Math.min(spd, RUN * 0.6);
   if (p.primary && p.slot === 'primary' && p.w.type === 'sniper') spd *= 0.93;
   const accel = p.onGround ? 14 : 2;
@@ -1476,26 +1553,39 @@ function updateHud(dt) {
 }
 /* ---- minimap ---- */
 const mm = $('minimap'), mctx = mm.getContext('2d');
-const MM_S = mm.width / MAP_W;
-const mmBase = makeCanvas(mm.width, mm.height, (x) => {
-  x.fillStyle = 'rgba(12,16,22,0.85)'; x.fillRect(0, 0, mm.width, mm.height);
-  const s = CELL * MM_S;
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-    const h = HGT[r * COLS + c], ch = MAP[r][c];
-    if (h === WALL_H) continue;
-    x.fillStyle = h > 0 ? 'rgba(120,130,140,0.9)' : ch === 'A' || ch === 'B' ? 'rgba(210,190,160,0.55)' : 'rgba(170,175,180,0.35)';
-    x.fillRect(c * s, r * s, s + 0.5, s + 0.5);
-  }
-  x.font = 'bold 16px Rajdhani, Arial'; x.fillStyle = 'rgba(255,255,255,0.8)'; x.textAlign = 'center';
-  x.fillText('A', (REG.A.c0 + REG.A.c1 + 1) / 2 * s, (REG.A.r0 + REG.A.r1 + 1) / 2 * s + 6);
-  x.fillText('B', (REG.B.c0 + REG.B.c1 + 1) / 2 * s, (REG.B.r0 + REG.B.r1 + 1) / 2 * s + 6);
-});
+let MM_S = 1, MM_OX = 0, MM_OY = 0, mmBase = null;
+const mmx = x => MM_OX + x * MM_S, mmy = z => MM_OY + z * MM_S;
+function siteCenter(k) { let x = 0, z = 0, n = 0; for (const i of SETS[k]) { x += (i % COLS + 0.5) * CELL; z += (((i / COLS) | 0) + 0.5) * CELL; n++; } return { x: x / n, z: z / n }; }
+function buildMinimap() {
+  // fit the playable area (walkable bounds) into the minimap
+  let c0 = COLS, c1 = 0, r0 = ROWS, r1 = 0;
+  for (let i = 0; i < WALK.length; i++) if (WALK[i]) { const c = i % COLS, r = (i / COLS) | 0; if (c < c0) c0 = c; if (c > c1) c1 = c; if (r < r0) r0 = r; if (r > r1) r1 = r; }
+  const pw = (c1 - c0 + 3) * CELL, pd = (r1 - r0 + 3) * CELL;
+  MM_S = Math.min(mm.width / pw, mm.height / pd);
+  MM_OX = (mm.width - (c1 + c0 + 1) * CELL * MM_S) / 2; MM_OY = (mm.height - (r1 + r0 + 1) * CELL * MM_S) / 2;
+  mmBase = makeCanvas(mm.width, mm.height, (x) => {
+    x.fillStyle = 'rgba(12,16,22,0.85)'; x.fillRect(0, 0, mm.width, mm.height);
+    const s = CELL * MM_S;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c, walk = WALK[i], h = HGT[i];
+      let col = null;
+      if (walk) col = SETS.A.has(i) || SETS.B.has(i) ? 'rgba(210,190,160,0.6)' : `rgba(170,175,180,${0.3 + clamp(h / 8, -0.1, 0.3)})`;
+      else if (!CUSTOM && h < WALL_H) col = 'rgba(120,130,140,0.9)';
+      else if (CUSTOM) { let adj = false; for (let dr = -1; dr <= 1 && !adj; dr++) for (let dc = -1; dc <= 1; dc++) if (isWalk(c + dc, r + dr)) { adj = true; break; } if (adj) col = 'rgba(60,66,76,0.9)'; }
+      if (!col) continue;
+      x.fillStyle = col; x.fillRect(MM_OX + c * s, MM_OY + r * s, s + 0.5, s + 0.5);
+    }
+    x.font = 'bold 16px Rajdhani, Arial'; x.fillStyle = 'rgba(255,255,255,0.85)'; x.textAlign = 'center';
+    for (const k of ['A', 'B']) { const p = siteCenter(k); x.fillText(k, mmx(p.x), mmy(p.z) + 6); }
+  });
+}
+buildMinimap();
 function drawMinimap() {
   const x = mctx, p = G.player; x.clearRect(0, 0, mm.width, mm.height); x.drawImage(mmBase, 0, 0);
   const C = G.charge;
   if (C.state === 'dropped' || C.state === 'planted') {
     x.fillStyle = C.state === 'planted' ? '#ff4655' : '#ffd166';
-    x.save(); x.translate(C.pos.x * MM_S, C.pos.z * MM_S); x.rotate(Math.PI / 4); x.fillRect(-4, -4, 8, 8); x.restore();
+    x.save(); x.translate(mmx(C.pos.x), mmy(C.pos.z)); x.rotate(Math.PI / 4); x.fillRect(-4, -4, 8, 8); x.restore();
   }
   for (const a of G.agents) {
     if (a.isPlayer) continue;
@@ -1503,13 +1593,13 @@ function drawMinimap() {
     if (!ally && !(a.alive && a.spotted > G.time)) continue;
     x.globalAlpha = a.alive ? 1 : 0.35;
     x.fillStyle = ally ? '#35d6c5' : '#ff4655';
-    x.beginPath(); x.arc(a.pos.x * MM_S, a.pos.z * MM_S, 3.5, 0, 7); x.fill();
-    if (a.alive) { x.strokeStyle = x.fillStyle; x.lineWidth = 1.5; x.beginPath(); x.moveTo(a.pos.x * MM_S, a.pos.z * MM_S); const f = fwd(a.yaw, 0); x.lineTo((a.pos.x + f.x * 3) * MM_S, (a.pos.z + f.z * 3) * MM_S); x.stroke(); }
-    if (C.state === 'carried' && C.carrier === a && ally) { x.fillStyle = '#ffd166'; x.fillRect(a.pos.x * MM_S - 2, a.pos.z * MM_S - 8, 4, 4); }
+    x.beginPath(); x.arc(mmx(a.pos.x), mmy(a.pos.z), 3.5, 0, 7); x.fill();
+    if (a.alive) { x.strokeStyle = x.fillStyle; x.lineWidth = 1.5; x.beginPath(); x.moveTo(mmx(a.pos.x), mmy(a.pos.z)); const f = fwd(a.yaw, 0); x.lineTo(mmx(a.pos.x + f.x * 3), mmy(a.pos.z + f.z * 3)); x.stroke(); }
+    if (C.state === 'carried' && C.carrier === a && ally) { x.fillStyle = '#ffd166'; x.fillRect(mmx(a.pos.x) - 2, mmy(a.pos.z) - 8, 4, 4); }
   }
   x.globalAlpha = 1;
   // player arrow + view cone
-  const px = p.pos.x * MM_S, pz = p.pos.z * MM_S;
+  const px = mmx(p.pos.x), pz = mmy(p.pos.z);
   x.save(); x.translate(px, pz); x.rotate(-p.yaw);
   x.fillStyle = 'rgba(255,255,255,0.12)'; x.beginPath(); x.moveTo(0, 0); x.arc(0, 0, 40, -Math.PI / 2 - 0.6, -Math.PI / 2 + 0.6); x.closePath(); x.fill();
   x.fillStyle = p.alive ? '#fff' : '#888'; x.beginPath(); x.moveTo(0, -7); x.lineTo(5, 5); x.lineTo(0, 2); x.lineTo(-5, 5); x.closePath(); x.fill();
@@ -1524,7 +1614,7 @@ function renderFrame(dt) {
   let pos, yaw, pitch, fov = vfov();
   if (!p || G.phase === 'menu') {
     const t = performance.now() / 1000 * 0.08;
-    pos = [MAP_W / 2 + Math.sin(t) * 40, 34, MAP_D / 2 + Math.cos(t) * 30]; yaw = yawTo(MAP_W / 2 - pos[0], MAP_D / 2 - pos[2]); pitch = -0.6;
+    const S = Math.max(MAP_W, MAP_D); pos = [MAP_W / 2 + Math.sin(t) * S * 0.33, S * 0.28, MAP_D / 2 + Math.cos(t) * S * 0.25]; yaw = yawTo(MAP_W / 2 - pos[0], MAP_D / 2 - pos[2]); pitch = -0.6;
   } else if (p.alive) {
     const e = p.eye();
     pos = [e.x, e.y, e.z]; yaw = p.yaw + p.recoil.x * 0.35; pitch = p.pitch + p.recoil.y * 0.4;
@@ -1551,18 +1641,19 @@ function renderFrame(dt) {
   G.listener = { x: pos[0], z: pos[2], yaw };
   // world
   const I = M4.create();
-  R.draw(MESH.floor, I, { tex: TEX.floor, cast: false });
-  for (const w of MESH.walls) R.draw(w.mesh, I, { tex: w.tex });
-  R.draw(MESH.crates, I, { tex: TEX.crate });
-  R.draw(MESH.backdrop, I, { cast: false, shadow: false });
+  for (const w of MESH.world) R.draw(w.mesh, I, w);
   // site & spawn markings
-  for (const [s, tex] of [['A', TEX.siteA], ['B', TEX.siteB]]) {
+  if (CUSTOM) for (const k of ['A', 'B']) {
+    const c = siteCenter(k), h = hAt(cellOf(c.x), cellOf(c.z));
+    billboard(c.x, (isFinite(h) ? h : 0) + 4.5, c.z, 2.2, TEX['letter' + k], [1, 0.85, 0.6, 0.75], 'alpha');
+  }
+  if (!CUSTOM) for (const [s, tex] of [['A', TEX.siteA], ['B', TEX.siteB]]) {
     const g = REG[s], cx = (g.c0 + g.c1 + 1) / 2 * CELL, cz = (g.r0 + g.r1 + 1) / 2 * CELL;
     const m = M4.identity(_m); M4.translate(m, cx, 0.02, cz); M4.rotateX(m, -Math.PI / 2);
     M4.scale(m, (g.c1 - g.c0 + 1) * CELL - 1, (g.r1 - g.r0 + 1) * CELL - 1, 1);
     R.draw(MESH.quad, m, { tex, color: [1, 0.95, 0.85, 0.35], mode: 'alpha', cast: false });
   }
-  if (G.phase === 'buy') for (const k of ['T', 'D']) {
+  if (G.phase === 'buy' && !CUSTOM) for (const k of ['T', 'D']) {
     const g = REG[k], cx = (g.c0 + g.c1 + 1) / 2 * CELL, cz = (g.r0 + g.r1 + 1) / 2 * CELL;
     const m = M4.identity(_m); M4.translate(m, cx, 0.03, cz); M4.rotateX(m, -Math.PI / 2);
     M4.scale(m, (g.c1 - g.c0 + 1) * CELL, (g.r1 - g.r0 + 1) * CELL, 1);
@@ -1628,9 +1719,45 @@ $('sens').oninput = e => { G.sens = +e.target.value; $('sensVal').textContent = 
 $('fovIn').oninput = e => { G.fov = +e.target.value; $('fovVal').textContent = G.fov; saveSetting('fov', G.fov); };
 $('vol').oninput = e => { Snd.setVol(+e.target.value); $('volVal').textContent = Math.round(Snd.vol * 100); saveSetting('vol', Snd.vol); };
 $('playBtn').onclick = () => { Snd.init(); startMatch(sel.size, sel.diff); };
+/* ---- map picker ---- */
+MESH.defaultWorld = MESH.world;
+const customMap = { buf: null, name: '', baseScale: 0, data: null };
+function mapStatus(msg, cls = '') { $('mapStatus').textContent = msg; $('mapStatus').className = cls; }
+function setMapButtons(custom) { $('mapDefault').classList.toggle('on', !custom); $('mapLoad').classList.toggle('on', custom); $('mapScaleRow').classList.toggle('hidden', !custom); }
+function useDefaultMap() {
+  initDefaultMap(); MESH.world = MESH.defaultWorld; applyMapLighting(); buildMinimap();
+  setMapButtons(false); mapStatus('Built-in map. Or load your own .glb map (it stays on your computer).');
+}
+async function useCustomMap(scaleMul = 1) {
+  $('playBtn').disabled = true;
+  try {
+    const opts = customMap.baseScale ? { scale: customMap.baseScale * scaleMul } : {};
+    const data = await GLBMap.load(customMap.buf, opts, m => mapStatus(m));
+    if (!customMap.baseScale) customMap.baseScale = data.scale;
+    mapStatus('Uploading textures to GPU…'); await new Promise(r => setTimeout(r, 0));
+    initCustomMap(data); await buildCustomWorld(data); applyMapLighting(); buildMinimap();
+    customMap.data = data; setMapButtons(true);
+    const who = data.info && data.info.author ? ` · model by ${data.info.author.replace(/\s*\(.*\)/, '')}` : '';
+    const title = data.info && data.info.title ? data.info.title : customMap.name;
+    mapStatus(`✓ ${title}${who} — ${Math.round(MAP_W)}×${Math.round(MAP_D)} m, ${data.stats.walk} walkable cells. Sites placed automatically.`, 'ok');
+  } catch (e) {
+    console.error(e); mapStatus('Could not load that map: ' + e.message, 'err'); useDefaultMap();
+  } finally { $('playBtn').disabled = false; }
+}
+$('mapDefault').onclick = () => useDefaultMap();
+$('mapLoad').onclick = () => $('mapFile').click();
+$('mapFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  customMap.buf = await f.arrayBuffer(); customMap.name = f.name.replace(/\.glb$/i, ''); customMap.baseScale = 0;
+  $('mapScale').value = 1; $('mapScaleVal').textContent = '×1.00';
+  await useCustomMap(1);
+  e.target.value = '';
+};
+$('mapScale').oninput = e => { $('mapScaleVal').textContent = '×' + (+e.target.value).toFixed(2); };
+$('mapApply').onclick = () => { if (customMap.buf) useCustomMap(+$('mapScale').value); };
 $('againBtn').onclick = () => { Snd.init(); startMatch(sel.size, sel.diff); };
 $('menuBtn').onclick = () => { $('gameover').classList.add('hidden'); $('menu').classList.remove('hidden'); G.phase = 'menu'; G.player = null; };
 if (matchMedia('(pointer: coarse)').matches) $('touchNote').classList.remove('hidden');
 
 // debug / test hook
-window.RIFT = { G, WEAPONS, startMatch, setTimeScale: s => G.timeScale = s, rayGrid, findPath, endRound, R, update, renderFrame, updateHud };
+window.RIFT = { useCustomMap, customMap, useDefaultMap, get MAP_W() { return MAP_W; }, get CELL() { return CELL; }, G, WEAPONS, startMatch, setTimeScale: s => G.timeScale = s, rayGrid, findPath, endRound, R, update, renderFrame, updateHud };

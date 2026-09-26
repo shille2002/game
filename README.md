@@ -24,6 +24,21 @@ A browser-based tactical shooter prototype, inspired by the attack/defend round 
 - **HUD:** minimap, kill feed, scoreboard (Tab), damage direction indicator, hit markers, death cam and spectating.
 - **Rendering:** a custom WebGL2 renderer with real-time sun shadows, fog and a stylized look. All sound is synthesized.
 
+## Custom maps (.glb)
+
+On the main menu, click **LOAD .GLB…** and pick any `.glb` model on your computer.
+
+- The file is processed **locally in your browser**. It is never uploaded anywhere.
+- RIFTLINE automatically:
+  - works out floors, walls and cover from the mesh;
+  - lets players and bots hop over low barriers;
+  - crops away empty fields;
+  - places spawns, the A/B sites and bot routes.
+- If the map feels too big or too small, use the **MAP SIZE** slider, then click **APPLY**.
+- Invisible helper meshes named `collision`, `trigger` and so on are ignored for walking.
+
+Only load models you are allowed to use. Don't commit third-party models to this repo unless their licence allows redistribution.
+
 ## Controls
 
 | Key | Action |
@@ -53,6 +68,7 @@ A browser-based tactical shooter prototype, inspired by the attack/defend round 
 index.html     page layout: HUD, menus, buy menu
 style.css      all UI styling
 js/engine.js   tiny WebGL2 renderer (meshes, shadows, sky, fog, textures)
+js/mapload.js  .glb loader: mesh → walkable grid, auto spawns/sites
 js/game.js     the game: map, movement, weapons, bots, rounds, economy, HUD, audio
 ```
 
